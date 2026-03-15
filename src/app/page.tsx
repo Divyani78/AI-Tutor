@@ -30,7 +30,7 @@ export default function Home() {
             setAuthUser(data.user);
           }
           // Clean up URL (remove tokens from address bar)
-          window.history.replaceState({}, '', '/');
+          window.history.replaceState({}, '', '/ai-tutor');
         } else {
           // No tokens in URL — check existing local session
           const { data } = await supabase.auth.getUser();
