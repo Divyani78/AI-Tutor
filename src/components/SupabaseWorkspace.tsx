@@ -1,43 +1,15 @@
 'use client'
 
-import React from "react";
 import Workspace from "./Workspace";
 import { useSupabaseQuestions } from "../hooks/useSupabaseQuestions";
 
 export default function SupabaseWorkspace() {
   const {
     questions,
-    subjects,
-    topics,
-    chapters,
-    difficulties,
-    types,
     loading,
     error,
     refetch,
   } = useSupabaseQuestions();
-
-  const [selectedSubject, setSelectedSubject] = React.useState("All");
-  const [selectedTopic, setSelectedTopic] = React.useState("All");
-  const [selectedChapter, setSelectedChapter] = React.useState("All");
-  const [selectedDifficulty, setSelectedDifficulty] = React.useState("All");
-  const [selectedType, setSelectedType] = React.useState("All");
-
-  // ✅ FIX: removed `refetch` from deps — it was a new reference every render,
-  // causing this effect to re-run infinitely. Filters are the only real deps.
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      refetch({
-        subject: selectedSubject === "All" ? undefined : selectedSubject,
-        topic: selectedTopic === "All" ? undefined : selectedTopic,
-        chapter: selectedChapter === "All" ? undefined : selectedChapter,
-        difficulty: selectedDifficulty === "All" ? undefined : selectedDifficulty,
-        type: selectedType === "All" ? undefined : selectedType,
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSubject, selectedTopic, selectedChapter, selectedDifficulty, selectedType]);
 
   if (loading) {
     return (
@@ -81,23 +53,6 @@ export default function SupabaseWorkspace() {
   }
 
   return (
-    <Workspace
-      questions={questions}
-      subjects={subjects}
-      topics={topics}
-      chapters={chapters}
-      difficulties={difficulties}
-      types={types}
-      selectedSubject={selectedSubject}
-      selectedTopic={selectedTopic}
-      selectedChapter={selectedChapter}
-      selectedDifficulty={selectedDifficulty}
-      selectedType={selectedType}
-      onSubjectChange={setSelectedSubject}
-      onTopicChange={setSelectedTopic}
-      onChapterChange={setSelectedChapter}
-      onDifficultyChange={setSelectedDifficulty}
-      onTypeChange={setSelectedType}
-    />
+    <Workspace questions={questions} />
   );
 }

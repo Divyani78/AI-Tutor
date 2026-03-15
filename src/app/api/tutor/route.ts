@@ -383,7 +383,7 @@ Output: {"type": "text", "title": "${tutorName}", "content": "<response>"}`;
                     understanding_level: behaviorSummary?.understanding_level ?? null,
                     recommended_action: behaviorSummary?.recommended_action ?? null,
                 },
-            }).then(() => {}).catch(() => {});
+            }).then(() => {}, () => {});
         }
 
         return NextResponse.json(parsedResponse)

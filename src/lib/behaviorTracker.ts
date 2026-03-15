@@ -232,7 +232,6 @@ class BehaviorTracker {
       await supabase.from("behavior_summaries").upsert({
         user_id: this.userId,
         session_id: this.sessionId,
-        question_id: questionId,
         ...summary,
         updated_at: new Date().toISOString(),
       });

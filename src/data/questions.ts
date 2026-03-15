@@ -5,10 +5,18 @@ export interface Question {
     content: string
     subject: string
     topic?: string
+    chapter?: string
+    type?: string
     difficulty?: string
     solution_steps?: string[]
     imageUrl?: string
     microConcepts?: string[]
+    positiveMarks?: number
+    negativeMarks?: number
+    numericalAnswer?: string
+    numericalTolerance?: string
+    tags?: string[]
+    source?: string
 }
 
 export const QUESTIONS: Question[] = [

@@ -110,7 +110,7 @@ function QuestionListItem({
                 </div>
                 <span className={clsx(
                     "text-xs px-2 py-0.5 rounded-full border flex-shrink-0 font-medium",
-                    difficultyColors[question.difficulty] || (isDarkMode ? 'bg-gray-700 text-gray-300 border-gray-600' : 'bg-gray-100 text-gray-600 border-gray-200')
+                    (question.difficulty && difficultyColors[question.difficulty]) || (isDarkMode ? 'bg-gray-700 text-gray-300 border-gray-600' : 'bg-gray-100 text-gray-600 border-gray-200')
                 )}>
                     {question.difficulty}
                 </span>
