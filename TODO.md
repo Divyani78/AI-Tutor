@@ -1,0 +1,1 @@
+# AI Tutor Updates\n\nLogo replacement:\n- [x] Header logo 36px no emoji\n- [x] Tutor avatars /image.png\n\nBack Arrow:\n- [ ] Add ChevronLeft button in header to http://localhost:3000/dashboard/ai-prep#\n- [ ] Test nav
