@@ -24,7 +24,7 @@ export default function QuestionPanel({ question, isDarkMode = false }: Question
 
         try {
             const tracker = getTracker()
-            tracker.setQuestion(question.id)
+            tracker.setQuestion(question.id, question.subject, question.topic)
             prevQuestionId.current = question.id
             console.log('[BehaviorTracker] Now tracking question:', question.id, '-', question.title)
         } catch {

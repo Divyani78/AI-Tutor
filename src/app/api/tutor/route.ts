@@ -4,6 +4,7 @@ import { getPrerequisites } from '@/data/knowledgeGraph'
 import { getStudentProfile } from '@/lib/studentProfileService'
 import { supabase } from '@/lib/supabaseClient'
 import type { BehaviorSummary } from '@/lib/behaviorTracker'
+import { fetchEdunextPerformance, buildEdunextContext } from '@/lib/edunextService'
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -117,7 +118,7 @@ Output ONLY a JSON object: { "selected_agent": "<agent_name>" }`,
             score_history: []
         };
 
-        // ─── NEW: Fetch long-term student behavior profile from Supabase ──────────
+        // ─── Fetch long-term student behavior profile from Supabase ──────────────
         let studentBehaviorProfile: Record<string, any> | null = null;
         try {
             const { data } = await supabase
@@ -128,7 +129,11 @@ Output ONLY a JSON object: { "selected_agent": "<agent_name>" }`,
             studentBehaviorProfile = data;
         } catch { /* table may not exist yet — silently skip */ }
 
-        // ─── NEW: Build the behavior context string injected into every agent ─────
+        // ─── Fetch EduNext contest/mock performance ───────────────────────────────
+        const edunextRecords = await fetchEdunextPerformance(userId);
+        const edunextContext = buildEdunextContext(edunextRecords);
+
+        // ─── Build the behavior context string injected into every agent ──────────
         const behaviorContext = buildBehaviorContext(behaviorSummary, studentBehaviorProfile);
 
         const commonContext = `${tutorPersona}
@@ -157,6 +162,8 @@ STUDENT PROFILE:
 - Prerequisites for this topic: ${JSON.stringify(getPrerequisites(questionContext?.title || '', 1))}
 
 ${behaviorContext}
+
+${edunextContext}
 
 CURRENT QUESTION:
 Title: ${questionContext?.title || 'Unknown'}

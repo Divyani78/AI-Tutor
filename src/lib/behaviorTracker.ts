@@ -3,6 +3,7 @@
  */
 
 import { supabase } from "./supabaseClient";
+import { saveAITutorInsight } from "./edunextService";
 
 // Types unchanged
 export type EventType =
@@ -55,6 +56,8 @@ class BehaviorTracker {
   private userId: string;
   private isGuest: boolean;
   private currentQuestionId: string = "";
+  private currentSubject: string = "";
+  private currentTopic: string = "";
   private events: BehaviorEvent[] = [];
   private questionStartTime: number = 0;
   private lastActivityTime: number = Date.now();
@@ -89,11 +92,13 @@ class BehaviorTracker {
     if (this.pauseTimer) clearTimeout(this.pauseTimer);
   }
 
-  setQuestion(questionId: string) {
+  setQuestion(questionId: string, subject?: string, topic?: string) {
     if (this.currentQuestionId && this.currentQuestionId !== questionId) {
       this.saveSummary(this.currentQuestionId);
     }
     this.currentQuestionId = questionId;
+    this.currentSubject = subject ?? "";
+    this.currentTopic = topic ?? "";
     this.questionStartTime = Date.now();
     this.track("question_viewed", { question_id: questionId });
     this.resetPauseTimer();
@@ -237,6 +242,11 @@ class BehaviorTracker {
       });
     } catch (err) {
       console.error("[BehaviorTracker] Failed to save summary:", err);
+    }
+    // Push insights to shared table so EduNext can read them
+    if (this.currentSubject && this.currentTopic) {
+      saveAITutorInsight(this.userId, this.currentSubject, this.currentTopic, summary)
+        .catch(() => {});
     }
   }
 

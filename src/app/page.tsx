@@ -29,6 +29,11 @@ export default function Home() {
           if (!error && data?.user) {
             setAuthUser(data.user);
           }
+          // Store EduNext context params for use by tutor components
+          const edunextApi = params.get('edunext_api');
+          const edunextUserId = params.get('user_id');
+          if (edunextApi) sessionStorage.setItem('edunext_api', edunextApi);
+          if (edunextUserId) sessionStorage.setItem('edunext_user_id', edunextUserId);
           // Clean up URL (remove tokens from address bar)
           window.history.replaceState({}, '', '/');
         } else {
