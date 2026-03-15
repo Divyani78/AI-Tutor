@@ -1,6 +1,31 @@
+import { AuthOptions } from "next-auth"
+import GoogleProvider from "next-auth/providers/google"
 import { signIn, signOut } from "next-auth/react"
 import { getServerSession } from "next-auth"
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"
+
+export const authOptions: AuthOptions = {
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+  ],
+  pages: {
+    signIn: '/login',
+  },
+  callbacks: {
+    async session({ session, token }) {
+      return {
+        ...session,
+        user: {
+          ...session.user,
+          id: token.sub,
+        }
+      }
+    },
+  },
+  secret: process.env.NEXTAUTH_SECRET,
+}
 
 // For client-side use - redirect to Google login
 export async function signInWithGoogle() {
@@ -16,7 +41,3 @@ export async function signOutUser() {
 export async function getAuthSession() {
   return getServerSession(authOptions)
 }
-
-// Re-export authOptions for use in other files
-export { authOptions }
-
