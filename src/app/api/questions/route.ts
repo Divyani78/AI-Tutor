@@ -1,10 +1,7 @@
 // src/app/api/questions/route.ts
-// ✅ Server-side only — service role key never exposed to browser
-// ✅ Checks NextAuth session before allowing any Supabase query
+// Queries questions from Supabase using service role (bypasses RLS)
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { createClient } from '@supabase/supabase-js'
 
 // Service role client — bypasses RLS, only used server-side
@@ -15,13 +12,6 @@ const supabaseAdmin = createClient(
 )
 
 export async function GET(req: NextRequest) {
-  // 1. Check user is logged in via NextAuth
-  const session = await getServerSession(authOptions)
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  // 2. Parse filter params from query string
   const { searchParams } = new URL(req.url)
   const subject    = searchParams.get('subject')
   const topic      = searchParams.get('topic')
@@ -29,7 +19,6 @@ export async function GET(req: NextRequest) {
   const difficulty = searchParams.get('difficulty')
   const type       = searchParams.get('type')
 
-  // 3. Build Supabase query
   let query = supabaseAdmin.from('questions').select('*')
 
   if (subject)    query = query.eq('subject', subject)
@@ -51,12 +40,6 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  // Endpoint for fetching distinct filter values
-  const session = await getServerSession(authOptions)
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
   const { column } = await req.json()
   const dbColumn = column === 'type' ? 'question_type' : column
 
