@@ -4,14 +4,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-// Service role client — bypasses RLS, only used server-side
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false } }
-)
+// Lazy-init to avoid crashing at build time when env vars aren't available
+let cachedClient: ReturnType<typeof createClient> | null = null
+function getSupabaseAdmin() {
+  if (!cachedClient) {
+    cachedClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { persistSession: false } }
+    )
+  }
+  return cachedClient
+}
 
 export async function GET(req: NextRequest) {
+  const supabase = getSupabaseAdmin()
   const { searchParams } = new URL(req.url)
   const subject    = searchParams.get('subject')
   const topic      = searchParams.get('topic')
@@ -19,7 +26,7 @@ export async function GET(req: NextRequest) {
   const difficulty = searchParams.get('difficulty')
   const type       = searchParams.get('type')
 
-  let query = supabaseAdmin.from('questions').select('*')
+  let query = supabase.from('questions').select('*')
 
   if (subject)    query = query.eq('subject', subject)
   if (topic)      query = query.eq('topic', topic)
@@ -40,6 +47,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const supabase = getSupabaseAdmin()
   const { column } = await req.json()
   const dbColumn = column === 'type' ? 'question_type' : column
 
@@ -48,7 +56,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid column' }, { status: 400 })
   }
 
-  const { data, error } = await supabaseAdmin
+  const { data, error } = await supabase
     .from('questions')
     .select(dbColumn)
 
