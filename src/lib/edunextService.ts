@@ -1,142 +1,205 @@
 /**
  * edunextService.ts
- * Fetches EduNext contest/mock performance for a user and formats it
- * for injection into the AI Tutor prompt. Also handles saving AI Tutor
- * behavior insights back to the shared Supabase tables for EduNext to read.
+ *
+ * Both EduNext and AI Tutor share the SAME Supabase project.
+ * This service directly queries EduNext's live tables to get user
+ * performance data and format it for the AI Tutor prompt.
+ *
+ * EduNext tables used:
+ *   - user_responses  : one row per question attempted (subject, accuracy, time, difficulty)
+ *   - test_attempts   : one row per mock/contest session (total marks, accuracy)
  */
 
 import { createClient } from '@supabase/supabase-js'
 import type { BehaviorSummary } from './behaviorTracker'
 
-// Use service role for server-side access; falls back to anon key on client
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
-const supabaseServer = createClient(supabaseUrl, supabaseKey)
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface EdunextPerformance {
-  id: string
-  user_id: string
-  contest_id: string
-  contest_name: string
-  contest_type: 'mock' | 'contest' | 'practice' | 'chapter_test'
-  score: number
-  max_score: number
-  percentile: number | null
-  rank: number | null
-  subject_scores: Record<string, number>    // { "Mathematics": 72, "Physics": 60 }
-  topic_scores: Record<string, number>      // { "Complex Numbers": 10, "Kinematics": 6 }
-  weak_topics: string[]
-  attempted_at: string
-}
-
-export interface AiTutorInsight {
-  user_id: string
+export interface SubjectPerformance {
   subject: string
-  topic: string
-  total_sessions: number
-  avg_struggle_score: number
-  total_hints_used: number
-  total_wrong_attempts: number
-  avg_time_per_q_ms: number
-  mastery_level: 'unknown' | 'struggling' | 'learning' | 'confident' | 'mastered'
-  last_session_summary: Record<string, unknown>
-  last_updated: string
+  totalQuestions: number
+  correct: number
+  accuracy: number
+  avgTimePerQuestion: number
+  difficultyBreakdown: { level: string; total: number; correct: number; accuracy: number }[]
 }
 
-// ─── Fetch EduNext Performance ────────────────────────────────────────────────
+export interface EdunextPerformanceSummary {
+  overview: {
+    totalQuestions: number
+    correctAnswers: number
+    overallAccuracy: number
+    totalMarks: number
+    rating: number
+    totalSessions: number
+    improvementTrend: number
+  }
+  subjectPerformance: SubjectPerformance[]
+  recentTests: { testId: string; marks: number; accuracy: number; date: string }[]
+  weakAreas: { area: string; accuracy: number; type: 'subject' | 'difficulty' }[]
+}
 
-/**
- * Returns the last 10 contest/mock entries for a user, newest first.
- */
-export async function fetchEdunextPerformance(userId: string): Promise<EdunextPerformance[]> {
-  if (!userId || userId.startsWith('guest_')) return []
+// ─── Fetch from shared Supabase ───────────────────────────────────────────────
+
+export async function fetchEdunextPerformance(userId: string): Promise<EdunextPerformanceSummary | null> {
+  if (!userId || userId.startsWith('guest_') || userId === 'user_123') return null
 
   try {
-    const { data, error } = await supabaseServer
-      .from('edunext_performance')
-      .select('*')
+    // Fetch question-level responses
+    const { data: responses, error: respErr } = await supabase
+      .from('user_responses')
+      .select('subject_name, is_correct, marks_obtained, time_spent_seconds, difficulty, session_id, created_at')
       .eq('user_id', userId)
-      .order('attempted_at', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (respErr) {
+      console.warn('[EdunextService] user_responses fetch error:', respErr.message)
+      return null
+    }
+
+    // Fetch test/contest attempts
+    const { data: attempts, error: attErr } = await supabase
+      .from('test_attempts')
+      .select('test_id, session_id, obtained_marks, accuracy, correct_answers, incorrect_answers, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
       .limit(10)
 
-    if (error) {
-      console.warn('[EdunextService] fetch error:', error.message)
-      return []
+    if (attErr) {
+      console.warn('[EdunextService] test_attempts fetch error:', attErr.message)
     }
-    return (data as EdunextPerformance[]) ?? []
+
+    const rows = responses ?? []
+    if (rows.length === 0) return null
+
+    // ─── Overview ────────────────────────────────────────────────────────────
+    const isCorrect = (r: any) => r.is_correct === true || r.is_correct === 'True'
+    const totalQuestions = rows.length
+    const correctAnswers = rows.filter(isCorrect).length
+    const overallAccuracy = Math.round((correctAnswers / totalQuestions) * 100)
+    const totalMarks = rows.reduce((sum: number, r: any) => sum + (r.marks_obtained || 0), 0)
+    const rating = 1200 + Math.round(totalMarks)
+    const sessions = [...new Set(rows.map((r: any) => r.session_id).filter(Boolean))]
+
+    // Improvement trend: last 10 vs prev 10
+    const last10 = rows.slice(0, 10)
+    const prev10 = rows.slice(10, 20)
+    const getAcc = (arr: any[]) => arr.length ? (arr.filter(isCorrect).length / arr.length) * 100 : 0
+    const improvementTrend = prev10.length ? +(getAcc(last10) - getAcc(prev10)).toFixed(1) : 0
+
+    // ─── Subject performance ─────────────────────────────────────────────────
+    const subjectNames = [...new Set(rows.map((r: any) => r.subject_name).filter(Boolean))] as string[]
+    const subjectPerformance: SubjectPerformance[] = subjectNames.map(subject => {
+      const subRows = rows.filter((r: any) => r.subject_name === subject)
+      const correct = subRows.filter(isCorrect).length
+      const totalTime = subRows.reduce((sum: number, r: any) => sum + (r.time_spent_seconds || 0), 0)
+      const avgTimePerQuestion = subRows.length > 0 ? Math.round(totalTime / subRows.length) : 0
+
+      const diffs = [...new Set(subRows.map((r: any) => r.difficulty).filter(Boolean))] as string[]
+      const difficultyBreakdown = diffs.map(diff => {
+        const diffRows = subRows.filter((r: any) => r.difficulty === diff)
+        const diffCorrect = diffRows.filter(isCorrect).length
+        return {
+          level: diff,
+          total: diffRows.length,
+          correct: diffCorrect,
+          accuracy: Math.round((diffCorrect / diffRows.length) * 100),
+        }
+      })
+
+      return {
+        subject,
+        totalQuestions: subRows.length,
+        correct,
+        accuracy: Math.round((correct / subRows.length) * 100),
+        avgTimePerQuestion,
+        difficultyBreakdown,
+      }
+    })
+
+    // ─── Recent tests ────────────────────────────────────────────────────────
+    const recentTests = (attempts ?? []).slice(0, 5).map((a: any) => ({
+      testId: a.test_id || a.session_id,
+      marks: a.obtained_marks ?? 0,
+      accuracy: a.accuracy ?? 0,
+      date: a.created_at,
+    }))
+
+    // ─── Weak areas ──────────────────────────────────────────────────────────
+    const weakAreas: { area: string; accuracy: number; type: 'subject' | 'difficulty' }[] = []
+    subjectPerformance.forEach(s => {
+      if (s.accuracy < 50) weakAreas.push({ area: s.subject, accuracy: s.accuracy, type: 'subject' })
+      s.difficultyBreakdown.forEach(d => {
+        if (d.accuracy < 50 && d.total >= 3) {
+          weakAreas.push({ area: `${s.subject} - ${d.level}`, accuracy: d.accuracy, type: 'difficulty' })
+        }
+      })
+    })
+
+    return {
+      overview: { totalQuestions, correctAnswers, overallAccuracy, totalMarks, rating, totalSessions: sessions.length, improvementTrend },
+      subjectPerformance,
+      recentTests,
+      weakAreas,
+    }
   } catch (e) {
     console.warn('[EdunextService] unexpected error:', e)
-    return []
+    return null
   }
 }
 
 // ─── Build Tutor Context String ───────────────────────────────────────────────
 
-/**
- * Converts EduNext performance records into a concise context block
- * that gets injected into the AI Tutor's system prompt.
- */
-export function buildEdunextContext(records: EdunextPerformance[]): string {
-  if (records.length === 0) return ''
+export function buildEdunextContext(perf: EdunextPerformanceSummary | null): string {
+  if (!perf) return ''
 
+  const { overview, subjectPerformance, recentTests, weakAreas } = perf
   const lines: string[] = [
     '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-    'EDUNEXT CONTEST & MOCK PERFORMANCE:',
+    'EDUNEXT LIVE PERFORMANCE DATA:',
     '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
   ]
 
-  // Latest result summary
-  const latest = records[0]
-  const latestPct = latest.max_score > 0
-    ? Math.round((latest.score / latest.max_score) * 100)
-    : 0
-  lines.push(`📋 LATEST: ${latest.contest_name} (${latest.contest_type})`)
-  lines.push(`   Score: ${latest.score}/${latest.max_score} (${latestPct}%)${latest.percentile ? ` | Percentile: ${latest.percentile.toFixed(1)}` : ''}${latest.rank ? ` | Rank: ${latest.rank}` : ''}`)
+  // Overview
+  lines.push(`📊 OVERALL: ${overview.totalQuestions} questions | Accuracy: ${overview.overallAccuracy}% | Rating: ${overview.rating}`)
+  lines.push(`   Sessions: ${overview.totalSessions} | Trend: ${overview.improvementTrend > 0 ? '+' : ''}${overview.improvementTrend}% vs previous`)
 
-  // Subject-wise scores from latest
-  if (Object.keys(latest.subject_scores).length > 0) {
-    const subjectLine = Object.entries(latest.subject_scores)
-      .map(([subj, score]) => `${subj}: ${score}`)
-      .join(' | ')
-    lines.push(`   Subject Scores: ${subjectLine}`)
-  }
-
-  // Weak topics from latest
-  if (latest.weak_topics.length > 0) {
-    lines.push(`   ⚠️ Weak Topics (latest): ${latest.weak_topics.join(', ')}`)
-  }
-
-  // Trend: last 3 scores
-  if (records.length >= 2) {
-    const trend = records.slice(0, 3).map(r => {
-      const pct = r.max_score > 0 ? Math.round((r.score / r.max_score) * 100) : 0
-      return `${pct}%`
+  // Subject breakdown
+  if (subjectPerformance.length > 0) {
+    lines.push(`\n📚 SUBJECT ACCURACY:`)
+    subjectPerformance.forEach(s => {
+      const bar = s.accuracy >= 70 ? '🟢' : s.accuracy >= 50 ? '🟡' : '🔴'
+      lines.push(`   ${bar} ${s.subject}: ${s.accuracy}% (${s.totalQuestions} qs, avg ${s.avgTimePerQuestion}s/q)`)
+      s.difficultyBreakdown.forEach(d => {
+        lines.push(`      └ ${d.level}: ${d.accuracy}% (${d.total} qs)`)
+      })
     })
-    lines.push(`📈 Recent Trend (newest first): ${trend.join(' → ')}`)
   }
 
-  // Aggregate weak topics across all records
-  const allWeakTopics = new Set<string>()
-  records.forEach(r => r.weak_topics.forEach(t => allWeakTopics.add(t)))
-  if (allWeakTopics.size > 0) {
-    lines.push(`🔴 Recurring Weak Topics: ${[...allWeakTopics].slice(0, 8).join(', ')}`)
+  // Recent tests
+  if (recentTests.length > 0) {
+    lines.push(`\n🏆 RECENT TESTS:`)
+    recentTests.forEach((t, i) => {
+      lines.push(`   ${i + 1}. ${t.marks} marks | ${t.accuracy}% accuracy`)
+    })
   }
 
-  // Average percentile
-  const percs = records.filter(r => r.percentile !== null).map(r => r.percentile!)
-  if (percs.length > 0) {
-    const avgPerc = (percs.reduce((a, b) => a + b, 0) / percs.length).toFixed(1)
-    lines.push(`🏅 Average Percentile: ${avgPerc}`)
+  // Weak areas
+  if (weakAreas.length > 0) {
+    lines.push(`\n⚠️ WEAK AREAS (< 50% accuracy):`)
+    weakAreas.forEach(w => lines.push(`   • ${w.area}: ${w.accuracy}%`))
   }
 
   lines.push('')
   lines.push('HOW TO USE THIS DATA:')
-  lines.push('→ If current question topic matches a recurring weak topic, be more patient and thorough.')
-  lines.push('→ If student scores <50% overall in EduNext mocks, increase encouragement and basics.')
-  lines.push('→ If percentile is high (>80), student is competitive — challenge them with harder variations.')
+  lines.push('→ If current topic matches a weak area, be extra patient and start from basics.')
+  lines.push('→ If overall accuracy < 50%, use extra encouragement and simpler language.')
+  lines.push('→ If accuracy > 75% and trend is positive, push harder — challenge with edge cases.')
   lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
   return lines.join('\n')
@@ -144,11 +207,6 @@ export function buildEdunextContext(records: EdunextPerformance[]): string {
 
 // ─── Save AI Tutor Insights (for EduNext to read) ────────────────────────────
 
-/**
- * Upserts the AI Tutor's behavior-based insight for a specific user+topic.
- * Called by behaviorTracker when saving summaries, so EduNext can read
- * how a student is doing on each topic in the AI Tutor.
- */
 export async function saveAITutorInsight(
   userId: string,
   subject: string,
@@ -158,33 +216,29 @@ export async function saveAITutorInsight(
   if (!userId || userId.startsWith('guest_') || !subject || !topic) return
 
   try {
-    // Fetch existing insight to aggregate
-    const { data: existing } = await supabaseServer
+    const { data: existing } = await supabase
       .from('ai_tutor_insights')
-      .select('*')
+      .select('total_sessions, avg_struggle_score, total_hints_used, total_wrong_attempts, avg_time_per_q_ms')
       .eq('user_id', userId)
       .eq('subject', subject)
       .eq('topic', topic)
       .single()
 
-    const prev = existing as AiTutorInsight | null
-    const sessions = (prev?.total_sessions ?? 0) + 1
-    const prevAvgStruggle = prev?.avg_struggle_score ?? 0
-    const newAvgStruggle = ((prevAvgStruggle * (sessions - 1)) + summary.struggle_score) / sessions
-    const totalHints = (prev?.total_hints_used ?? 0) + summary.hint_count
-    const totalWrong = (prev?.total_wrong_attempts ?? 0) + summary.wrong_attempts
-    const prevAvgTime = prev?.avg_time_per_q_ms ?? 0
-    const newAvgTime = ((prevAvgTime * (sessions - 1)) + summary.time_spent_ms) / sessions
+    const sessions = (existing?.total_sessions ?? 0) + 1
+    const prevAvg = existing?.avg_struggle_score ?? 0
+    const newAvg = ((prevAvg * (sessions - 1)) + summary.struggle_score) / sessions
 
-    await supabaseServer.from('ai_tutor_insights').upsert({
+    await supabase.from('ai_tutor_insights').upsert({
       user_id: userId,
       subject,
       topic,
       total_sessions: sessions,
-      avg_struggle_score: Math.round(newAvgStruggle),
-      total_hints_used: totalHints,
-      total_wrong_attempts: totalWrong,
-      avg_time_per_q_ms: Math.round(newAvgTime),
+      avg_struggle_score: Math.round(newAvg),
+      total_hints_used: (existing?.total_hints_used ?? 0) + summary.hint_count,
+      total_wrong_attempts: (existing?.total_wrong_attempts ?? 0) + summary.wrong_attempts,
+      avg_time_per_q_ms: Math.round(
+        (((existing?.avg_time_per_q_ms ?? 0) * (sessions - 1)) + summary.time_spent_ms) / sessions
+      ),
       mastery_level: summary.understanding_level,
       last_session_summary: summary as unknown as Record<string, unknown>,
       last_updated: new Date().toISOString(),
@@ -194,29 +248,18 @@ export async function saveAITutorInsight(
   }
 }
 
-// ─── Fetch AI Tutor Insights (for EduNext to pull) ───────────────────────────
+// ─── Fetch AI Tutor Insights (for EduNext pull endpoint) ─────────────────────
 
-/**
- * Returns all AI Tutor behavior insights for a user.
- * EduNext calls GET /api/edunext/insights?user_id=xxx to get this data.
- */
-export async function fetchAITutorInsights(userId: string): Promise<AiTutorInsight[]> {
+export async function fetchAITutorInsights(userId: string) {
   if (!userId) return []
-
   try {
-    const { data, error } = await supabaseServer
+    const { data } = await supabase
       .from('ai_tutor_insights')
       .select('*')
       .eq('user_id', userId)
       .order('last_updated', { ascending: false })
-
-    if (error) {
-      console.warn('[EdunextService] fetchAITutorInsights error:', error.message)
-      return []
-    }
-    return (data as AiTutorInsight[]) ?? []
-  } catch (e) {
-    console.warn('[EdunextService] unexpected error:', e)
+    return data ?? []
+  } catch {
     return []
   }
 }
